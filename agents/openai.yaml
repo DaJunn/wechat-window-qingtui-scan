@@ -1,0 +1,4 @@
+interface:
+  display_name: "橱窗清退预警巡检"
+  short_description: "一键扫描微信小店带货助手橱窗全量商品的清退预警标识，5-8秒出结论"
+  default_prompt: "跑下橱窗清退预警巡检，告诉我哪些商品有清退预警"
