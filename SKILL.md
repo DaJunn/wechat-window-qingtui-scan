@@ -1,60 +1,61 @@
 ---
 name: wechat-window-qingtui-scan
-description: 微信小店带货助手橱窗「清退预警 + 不可售卖」快速巡检。扫描 store.weixin.qq.com/talent/channel/window 橱窗全量商品，找出带红色「清退预警」「不可售卖」标识及「结束推广」等非推广中状态的商品和官方提示文案，5-8秒出结论，输出 MD 报告 + JSON 全量数据。当用户说「清退预警」「橱窗清退预警」「跑下橱窗清退预警」「哪些商品要被清退」「不可售卖」「卖不了的商品」「橱窗风险商品」「橱窗预警巡检」「橱窗有没有预警商品」时使用。只读巡检，不代用户做移除/隐藏等写操作。
+description: 巡检微信小店带货助手橱窗中的清退预警、不可售卖和非推广中商品，保留官方提示并输出 MD 与 JSON。适用于橱窗风险排查，只读，不隐藏或移除商品。
 ---
 
 # 橱窗清退预警巡检
 
-## 快速开始
+识别橱窗商品的清退预警和可售状态，给出商品明细、官方原因与处理建议。零库存本身不计本技能的风险；库存巡检可使用已安装的 `wechat-store-window-stock`。
 
-确认前置条件后直接跑脚本：
+## 输入与依赖
+
+确认目标带货助手账号，并记录页面「商品管理(N)」的总数。需要 Python 3、已登录 `store.weixin.qq.com` 的 Chrome，以及连接扩展的 kimi-webbridge：
 
 ```bash
-python3 ~/.agents/skills/wechat-window-qingtui-scan/scripts/window_qingtui_scan.py
+~/.kimi-webbridge/bin/kimi-webbridge status
 ```
 
-前置条件：
-- kimi-webbridge daemon 运行中（`~/.kimi-webbridge/bin/kimi-webbridge status` 返回 `running:true` 且 `extension_connected:true`）
-- Chrome 已登录 store.weixin.qq.com（带货助手账号）
+仅当 `running:true` 且 `extension_connected:true` 时继续。不代登录，不绕过验证。
 
-脚本自动完成：直达 SSR 内容 frame → 读 localStorage 缓存的 magic 签名 → 全量重放 `getTalentWindowProducts` 接口（pageSize=20 翻页到底）→ 扫描每条商品的 `productRemindTips` 字段。签名失效时自动点一次「下一页」重抓再重放，无需人工干预。
+## 执行
 
-## 输出与汇报
+在本 skill 目录运行：
 
-脚本落盘两个文件并向用户汇报：
-
-- `~/window_qingtui_check.md` — 巡检报告
-- `~/window_qingtui_check.json` — 全量商品数据（id/标题/店铺/价格/佣金/库存/预警状态）
-
-汇报格式：结论先行（共 N 个商品、M 个风险：清退预警 X 个、不可售卖 Y 个），风险商品用表格列**标识/商品/店铺/售价/佣金/库存/官方提示原文**，再给动作建议：清退预警→联系商家换品、无改善则移除（原因是「销售质量」不是佣金）；不可售卖/结束推广→直接移除换新品，避免占橱窗位和拖累质量分。
-
-## 风险标识识别口径
-
-三类风险都算命中，按优先级打 `warnType` 标签：
-
-1. `productRemindTips.remindStatusWording`（页面红色标识 rgba(250,81,81,1)）：「清退预警」「不可售卖」等，提示原文在 `remindDesc`；无标识商品该字段为空对象 `{}`
-2. `statusWording` ≠「推广中」（如「结束推广」）
-3. `itemCapability.canUse = false`（兜底判不可售卖）
-
-```json
-{
-  "remindTitle": "不可售卖",
-  "remindDesc": "商家已结束该商品的推广计划，该商品无法售卖。",
-  "remindStatusWording": "不可售卖"
-}
+```bash
+python3 scripts/window_qingtui_scan.py
 ```
 
-判断「无风险」前先校验 `total` 与页面「商品管理(N)」数字一致，防止漏页误报。注意：佣金字段可能为 `null`，报告生成已做容错；0 库存巡检属另一个 skill（wechat-store-window-stock），本 skill 不按库存判风险。
+脚本打开橱窗 SSR 页面，使用当前会话请求头读取商品列表；缓存失效时尝试翻页重新捕获。不会修改商品，但会改变页面位置并在浏览器 localStorage 缓存 magic 签名。
 
-## 故障排查
+默认文件固定为 `~/window_qingtui_check.md`、`~/window_qingtui_check.json`，重复运行会覆盖。执行前检查是否允许该输出位置及覆盖；需使用工作区或保留历史时，先调整脚本 `OUT_MD/OUT_JSON` 到允许的未占用路径。当前没有 `--out` 参数。
 
-- daemon 未就绪 → 按 kimi-webbridge skill 的 operations 流程先修复，不要绕过
-- 输出「magic 缓存失效」后仍失败 → Chrome 未登录或登录态过期，请用户登录后重跑
-- 反复找不到「下一页」按钮 → SSR 页没加载完，等 3 秒重跑一次；仍失败截图看页面是否弹了验证
-- 接口重放返回 403「mcn magic invalid」→ 签名缓存损坏，清 localStorage 的 `wk_window_magic` 键后重跑（脚本会自动重抓）
+## 识别与完整性核对
 
-## 边界
+风险标签按以下顺序取第一项，每件商品只计一次：
 
-- 全程只读：不隐藏、不移除、不改价、不改库存
-- 不把 magic 签名写进任何文件（只在浏览器 localStorage 里流转）
-- 推送飞书/定时任务只在用户明确要求时做，不在本 skill 默认动作里
+1. `productRemindTips.remindStatusWording`，官方提示为 `remindDesc`。
+2. `statusWording` 非空且不等于「推广中」，如「结束推广」。
+3. `itemCapability.canUse = false`，兜底标为「不可售卖」。
+
+必须核对 JSON 采集条数、商品 ID 是否重复及后台总数，再判断是否扫描完整。**当前脚本每页 20 条，最多 400 条；未对全部请求逐页校验成功状态，接口错误可能被当成空页。** 超过上限、总数不一致、重复 ID、异常结束或无法核对页面总数时，只报告已读取范围及缺口，不采用生成报告里的「全量／全部无风险」结论。
+
+空橱窗也可能被脚本当作签名失效，需以页面为据确认 0 个商品；不能凭报错推断没有风险。运行耗时受商品数、登录状态和页面加载影响，不承诺固定秒数。
+
+## 输出
+
+报告扫描时间、账号／页面、覆盖数／后台总数、是否完成核对及风险总数。按实际 `warnType` 分类汇总，不能把全部命中都叫「清退预警」。
+
+风险清单列：标识、商品、店铺、售价、佣金、库存、商品 ID、官方提示原文。缺失值写「未获取」，不自动补 0。
+
+处理建议以官方原因为据：清退预警先核对期限、联系商家评估替代品；结束推广或不可售卖先核对恢复条件，再建议替换或移除。不默认把原因归结为销售质量或佣金，也不自动执行清理。
+
+提供实际存在的 MD 和 JSON 文件。明确本次未隐藏、未移除商品，定时执行或推送仅在用户明确要求时安排。
+
+## 故障与局限
+
+- daemon 未就绪、登录或验证拦截：停止并说明需恢复的条件，不连续重试。
+- 找不到「下一页」：页面未加载完时重试一次；单页橱窗也可能无可用按钮，改查可见页面并注明覆盖范围。
+- 重新捕获签名后仍失败：核对登录及当前页，停止本次扫描；不把缓存内容打印、导出或发送。
+- 佣金对象为空、提示字段为空等情况可能使当前脚本异常；即使文件已生成也要检查是否完整。终端摘要不能代替 JSON 和页面核对。
+
+这是已登录账号范围内的只读风险采集，不负责判定平台处理结果；未获取、部分获取和核对完成应分别说明。
